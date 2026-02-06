@@ -33,17 +33,17 @@ Parse key information (e.g. email)
 Simple local development setup
 
 Backend: 
-```pip install -r requirements.txt
-uvicorn app:app --reload```
+pip install -r requirements.txt
+uvicorn app:app --reload
 
 Frontend:
 
-```npm install
-npm start```
+npm install
+npm start
 
 Frontend runs on http://localhost:3000 and communicates with the FastAPI backend.
 
-Status
+#Status:
 
 Early prototype / experimental build.
 
