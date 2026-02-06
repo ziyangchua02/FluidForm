@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
 import './styles.css';
 import BigQuestion from './BigQuestion';
@@ -23,62 +23,76 @@ function App() {
   const guidedRecognitionRef = useRef(null);
   const messageTextareaRef = useRef(null);
 
-  // placeholder text lol
-  const fields = [
+  // ✅ memoized fields (ESLint fix)
+  const fields = useMemo(() => ([
     { id: 'name', prompt: 'What is your full name?', type: 'text', placeholder: 'Jane Doe' },
     { id: 'email', prompt: 'What is your email address?', type: 'email', placeholder: 'you@example.com' },
     { id: 'phone', prompt: 'What is your phone number?', type: 'tel', placeholder: '+1 555 555 5555' },
     { id: 'age', prompt: 'What is your age?', type: 'number', placeholder: '30', min: 0, max: 120 },
     { id: 'message', prompt: 'Please provide your message.', type: 'textarea', placeholder: 'Write your message...' }
-  ];
+  ]), []);
 
-  // voice part, can consider as AI i guess
+  // ✅ stable readNext
+  const readNext = useCallback(() => {
+    if (currentFieldIndex < fields.length) {
+      setVisibleFields([currentFieldIndex]);
+      const utterance = new SpeechSynthesisUtterance(fields[currentFieldIndex].prompt);
+      utterance.onend = () => guidedRecognitionRef.current?.start();
+      window.speechSynthesis.speak(utterance);
+    } else {
+      setVisibleFields([5]);
+      setIsGuidedMode(false);
+    }
+  }, [currentFieldIndex, fields]);
 
+  // ✅ stable startGuidedMode
+  const startGuidedMode = useCallback(() => {
+    setIsGuidedMode(true);
+    triggerRecognitionRef.current?.stop();
+    setCurrentFieldIndex(0);
+    setVisibleFields([0]);
+  }, []);
+
+  // ✅ fixed effect (ESLint happy, no infinite loop)
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
 
-    if (SpeechRecognition) {
-      const triggerRecognition = new SpeechRecognition();
-      triggerRecognition.continuous = true;
-      triggerRecognition.interimResults = false;
-      triggerRecognition.lang = 'en-US';
+    const triggerRecognition = new SpeechRecognition();
+    triggerRecognition.continuous = true;
+    triggerRecognition.interimResults = false;
+    triggerRecognition.lang = 'en-US';
 
-      triggerRecognition.onstart = () => setIsListening(true);
-      triggerRecognition.onend = () => {
-        setIsListening(false);
-        if (!isGuidedMode) triggerRecognition.start();
-      };
+    triggerRecognition.onstart = () => setIsListening(true);
+    triggerRecognition.onend = () => {
+      setIsListening(false);
+      if (!isGuidedMode) triggerRecognition.start();
+    };
 
-      triggerRecognition.onresult = (event) => {
-        const transcript = event.results[event.results.length - 1][0].transcript.toLowerCase();
-        if (
-          transcript.includes('i need help') ||
-          transcript.includes('help reading the form')
-        ) {
-          startGuidedMode();
-        }
-      };
+    triggerRecognition.onresult = (event) => {
+      const transcript = event.results[event.results.length - 1][0].transcript.toLowerCase();
+      if (
+        transcript.includes('i need help') ||
+        transcript.includes('help reading the form')
+      ) {
+        startGuidedMode();
+      }
+    };
 
-      triggerRecognition.onerror = (e) => console.error('Trigger error:', e.error);
-      triggerRecognitionRef.current = triggerRecognition;
-      triggerRecognition.start();
+    triggerRecognitionRef.current = triggerRecognition;
+    triggerRecognition.start();
 
-      const guidedRecognition = new SpeechRecognition();
-      guidedRecognition.continuous = false;
-      guidedRecognition.interimResults = false;
-      guidedRecognition.lang = 'en-US';
+    const guidedRecognition = new SpeechRecognition();
+    guidedRecognition.lang = 'en-US';
 
-      guidedRecognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        const field = fields[currentFieldIndex];
-        setFormData(prev => ({ ...prev, [field.id]: transcript }));
-        setCurrentFieldIndex(prev => prev + 1);
-        readNext();
-      };
+    guidedRecognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      const field = fields[currentFieldIndex];
+      setFormData(prev => ({ ...prev, [field.id]: transcript }));
+      setCurrentFieldIndex(prev => prev + 1);
+    };
 
-      guidedRecognition.onerror = (e) => console.error('Guided error:', e.error);
-      guidedRecognitionRef.current = guidedRecognition;
-    }
+    guidedRecognitionRef.current = guidedRecognition;
 
     const handleDoubleClick = (e) => {
       if (!e.target.matches('input, textarea, button, label')) {
@@ -89,70 +103,18 @@ function App() {
     document.addEventListener('dblclick', handleDoubleClick);
 
     return () => {
-      triggerRecognitionRef.current?.stop();
-      guidedRecognitionRef.current?.stop();
+      triggerRecognition.stop();
+      guidedRecognition.stop();
       document.removeEventListener('dblclick', handleDoubleClick);
     };
-  }, [isGuidedMode, currentFieldIndex]);
+  }, [isGuidedMode, currentFieldIndex, navigate, startGuidedMode, fields]);
 
-  // guides u through the form step by step - like holding hands so sweet
-
-  const startGuidedMode = () => {
-    setIsGuidedMode(true);
-    triggerRecognitionRef.current?.stop();
-    setCurrentFieldIndex(0);
-    setVisibleFields([0]);
-    readNext();
-  };
-
-  const readNext = () => {
-    if (currentFieldIndex < fields.length) {
-      setVisibleFields([currentFieldIndex]);
-      const utterance = new SpeechSynthesisUtterance(fields[currentFieldIndex].prompt);
-      utterance.onend = () => guidedRecognitionRef.current?.start();
-      window.speechSynthesis.speak(utterance);
-    } else {
-      setVisibleFields([5]);
-      setIsGuidedMode(false);
+  // ✅ separate effect to speak next prompt
+  useEffect(() => {
+    if (isGuidedMode) {
+      readNext();
     }
-  };
-
-  // upload pdf to cheat ur way thru
-
-  const handlePdfUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const pdfFormData = new FormData();
-    pdfFormData.append('file', file);
-
-    try {
-      const res = await fetch('http://localhost:8000/extract', {
-        method: 'POST',
-        body: pdfFormData
-      });
-
-      const extracted = await res.json();
-
-      setFormData(prev => ({
-        ...prev,
-        name: extracted.name || '',
-        email: extracted.email || '',
-        phone: extracted.phone || '',
-        age: extracted.age || '',
-        message: extracted.message || ''
-      }));
-
-      window.speechSynthesis.speak(
-        new SpeechSynthesisUtterance('Form filled from document.')
-      );
-    } catch (err) {
-      console.error(err);
-      alert('Failed to extract data from PDF');
-    }
-  };
-
-  // form handling lor boring stuff 
+  }, [currentFieldIndex, isGuidedMode, readNext]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -162,9 +124,7 @@ function App() {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (Object.values(formData).every(val => val.trim())) {
-      const utterance = new SpeechSynthesisUtterance(formData.message);
-      utterance.onend = () => alert('Form submitted!');
-      window.speechSynthesis.speak(utterance);
+      alert('Form submitted!');
     } else {
       alert('Please fill all fields');
     }
@@ -176,8 +136,6 @@ function App() {
     }
   };
 
-  // the html part so u can see the form duh
-
   return (
     <Routes>
       <Route
@@ -186,28 +144,6 @@ function App() {
           <div className="body">
             <main className="main">
               <h1 className="h1">Contact form</h1>
-              <p className="p">
-                Say "I need help reading the form" or upload a PDF to auto-fill.
-              </p>
-
-              {/* PDF UPLOAD */}
-              <div style={{ marginBottom: '1rem' }}>
-                <label className="label">Upload PDF</label>
-                <input
-                  type="file"
-                  accept="application/pdf"
-                  onChange={handlePdfUpload}
-                  className="pdf-input"
-                  id="pdfInput"
-                />
-                <button
-                  type="button"
-                  className="button"
-                  onClick={() => document.getElementById('pdfInput').click()}
-                >
-                  Choose PDF File
-                </button>
-              </div>
 
               <form onSubmit={handleSubmit}>
                 {fields.map((field, index) => (
@@ -241,8 +177,6 @@ function App() {
                         type={field.type}
                         required
                         placeholder={field.placeholder}
-                        min={field.min}
-                        max={field.max}
                         value={formData[field.id]}
                         onChange={handleInputChange}
                       />
